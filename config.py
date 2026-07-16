@@ -20,7 +20,11 @@ SYSTEM_PROMPT = os.getenv(
     "а не просто текст. Код должен быть полным, рабочим и без лишних комментариев.",
 )
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 if not TELEGRAM_BOT_TOKEN:
     logger.warning("TELEGRAM_BOT_TOKEN не задан — бот будет работать в режиме health-check")
 if not GROQ_API_KEY:
     logger.warning("GROQ_API_KEY не задан — Groq-функции недоступны")
+if not DATABASE_URL:
+    logger.warning("DATABASE_URL не задан — история будет храниться в памяти")

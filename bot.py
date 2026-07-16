@@ -9,7 +9,6 @@ import logging
 import os
 import re
 import tempfile
-from collections import defaultdict
 
 from fastapi import FastAPI, Request
 from groq import Groq
@@ -22,6 +21,7 @@ from telegram.ext import (
 )
 
 from config import (
+    DATABASE_URL,
     GROQ_API_KEY,
     GROQ_MODEL,
     SYSTEM_PROMPT,
@@ -38,34 +38,30 @@ logger = logging.getLogger(__name__)
 # ── Groq-клиент ─────────────────────────────────────────────────────────────
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# ── История диалогов (user_id -> список сообщений) ──────────────────────────
-MAX_HISTORY = 20
-history: dict[int, list[dict]] = defaultdict(list)
-
 # ── Telegram Application (инициализируем один раз) ──────────────────────────
 application = Application.builder().token(TELEGRAM_BOT_TOKEN).build() if TELEGRAM_BOT_TOKEN else None
 
 
-def _build_messages(user_id: int, user_text: str) -> list[dict]:
+def _build_messages(user_id: int, user_text: str, history_rows: list[dict]) -> list[dict]:
     """Собрать список сообщений для Groq: system + история + новый запрос."""
     msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
-    msgs.extend(history[user_id])
+    for row in history_rows:
+        msgs.append({"role": row["role"], "content": row["content"]})
     msgs.append({"role": "user", "content": user_text})
     return msgs
-
-
-def _update_history(user_id: int, user_text: str, reply: str) -> None:
-    """Добавить пару вопрос-ответ в историю, обрезав до MAX_HISTORY."""
-    history[user_id].append({"role": "user", "content": user_text})
-    history[user_id].append({"role": "assistant", "content": reply})
-    if len(history[user_id]) > MAX_HISTORY * 2:
-        history[user_id] = history[user_id][-MAX_HISTORY * 2 :]
 
 
 async def _ask_groq(user_id: int, text: str) -> str:
     """Отправить запрос в Groq и вернуть ответ."""
     try:
-        messages = _build_messages(user_id, text)
+        # Загружаем историю из БД (или из памяти, если БД нет)
+        if DATABASE_URL:
+            import db
+            history_rows = await db.get_history(user_id, limit=20)
+        else:
+            history_rows = []
+
+        messages = _build_messages(user_id, text, history_rows)
         chat_completion = client.chat.completions.create(
             messages=messages,
             model=GROQ_MODEL,
@@ -73,7 +69,13 @@ async def _ask_groq(user_id: int, text: str) -> str:
             max_tokens=2048,
         )
         reply = chat_completion.choices[0].message.content or "…"
-        _update_history(user_id, text, reply)
+
+        # Сохраняем в БД
+        if DATABASE_URL:
+            await db.save_message(user_id, "user", text, model=GROQ_MODEL)
+            await db.save_message(user_id, "assistant", reply, model=GROQ_MODEL)
+            await db.increment_messages_used(user_id)
+
         return reply
     except Exception as e:
         logger.exception("Groq API error")
@@ -143,8 +145,18 @@ async def _send_reply(update: Update, text: str) -> None:
 
 async def start(update: Update, _context) -> None:
     """Команда /start."""
+    user = update.effective_user
+    if DATABASE_URL:
+        import db
+        await db.upsert_user(
+            user_id=user.id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            language_code=user.language_code,
+        )
     await update.message.reply_text(
-        "👋 Привет! Я бот на Groq API.\n"
+        "👋 Привет! Я — Fable 5, модель от Anthropic.\n"
         "Просто напиши мне что-нибудь или используй /ask <вопрос>.\n"
         "Команда /clear сбрасывает историю диалога."
     )
@@ -153,8 +165,9 @@ async def start(update: Update, _context) -> None:
 async def clear(update: Update, _context) -> None:
     """Команда /clear — сброс истории."""
     user_id = update.effective_user.id
-    if user_id in history:
-        del history[user_id]
+    if DATABASE_URL:
+        import db
+        await db.clear_history(user_id)
     await update.message.reply_text("🧹 История диалога очищена.")
 
 
@@ -213,7 +226,15 @@ async def health():
 
 
 async def lifespan_start():
-    """Инициализировать Application и установить webhook при старте."""
+    """Инициализировать пул БД, Application и установить webhook при старте."""
+    if DATABASE_URL:
+        import db
+        try:
+            await db.init_pool(DATABASE_URL)
+            logger.info("БД подключена")
+        except Exception as e:
+            logger.exception("Не удалось подключиться к БД: %s", e)
+
     if not application:
         logger.warning("TELEGRAM_BOT_TOKEN не задан — webhook не установлен")
         return
