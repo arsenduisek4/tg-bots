@@ -150,7 +150,8 @@ async def health():
 
 
 async def lifespan_start():
-    """Установить webhook при старте."""
+    """Инициализировать Application и установить webhook при старте."""
+    await application.initialize()
     webhook_url = os.getenv("RENDER_EXTERNAL_URL", "")
     if not webhook_url:
         logger.warning("RENDER_EXTERNAL_URL не задан — webhook не установлен")
