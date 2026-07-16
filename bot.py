@@ -7,6 +7,8 @@ Telegram-бот на Groq API (webhook для Render).
 
 import logging
 import os
+import re
+import tempfile
 from collections import defaultdict
 
 from fastapi import FastAPI, Request
@@ -78,6 +80,64 @@ async def _ask_groq(user_id: int, text: str) -> str:
         return f"❌ Ошибка при обращении к Groq: {e}"
 
 
+# ── Отправка ответа (текстом или файлом, если есть код) ─────────────────────
+
+
+_CODE_KEYWORDS = {"код", "code", "файл", "file", "скрипт", "script", "программа"}
+
+
+def _looks_like_code(text: str) -> bool:
+    """Проверить, содержит ли ответ блоки кода или запрос кода."""
+    if re.search(r"```[\w]*\n", text):
+        return True
+    first_line = text.split("\n", 1)[0].strip().lower()
+    if any(kw in first_line for kw in _CODE_KEYWORDS):
+        return True
+    return False
+
+
+async def _send_reply(update: Update, text: str) -> None:
+    """Отправить ответ — текстом или файлом, если похоже на код."""
+    if _looks_like_code(text):
+        # Определяем расширение по первому языку в блоке
+        ext = ".txt"
+        m = re.match(r"```(\w+)", text)
+        if m:
+            lang_map = {
+                "python": ".py", "py": ".py",
+                "javascript": ".js", "js": ".js",
+                "typescript": ".ts", "ts": ".ts",
+                "cpp": ".cpp", "c": ".c", "c++": ".cpp",
+                "java": ".java",
+                "go": ".go",
+                "rust": ".rs",
+                "bash": ".sh", "sh": ".sh",
+                "html": ".html", "css": ".css",
+                "json": ".json", "yaml": ".yaml", "yml": ".yaml",
+                "sql": ".sql",
+                "kotlin": ".kt",
+                "swift": ".swift",
+                "ruby": ".rb",
+                "php": ".php",
+            }
+            ext = lang_map.get(m.group(1).lower(), ".txt")
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=ext, delete=False, encoding="utf-8"
+        ) as f:
+            f.write(text)
+            tmp_path = f.name
+        try:
+            with open(tmp_path, "rb") as f:
+                await update.message.reply_document(
+                    document=f,
+                    filename=f"response{ext}",
+                )
+        finally:
+            os.unlink(tmp_path)
+    else:
+        await update.message.reply_text(text)
+
+
 # ── Обработчики ──────────────────────────────────────────────────────────────
 
 
@@ -109,7 +169,7 @@ async def ask(update: Update, context) -> None:
     user_id = update.effective_user.id
     await update.message.reply_chat_action("typing")
     reply = await _ask_groq(user_id, text)
-    await update.message.reply_text(reply)
+    await _send_reply(update, reply)
 
 
 async def handle_message(update: Update, _context) -> None:
@@ -120,7 +180,7 @@ async def handle_message(update: Update, _context) -> None:
         return
     await update.message.reply_chat_action("typing")
     reply = await _ask_groq(user_id, text)
-    await update.message.reply_text(reply)
+    await _send_reply(update, reply)
 
 
 # ── Регистрируем хендлеры ───────────────────────────────────────────────────
