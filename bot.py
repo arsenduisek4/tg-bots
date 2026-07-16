@@ -28,6 +28,11 @@ from config import (
     TELEGRAM_BOT_TOKEN,
 )
 
+if DATABASE_URL:
+    import db  # noqa: E402 — импортируем сразу, чтобы _pool был общим
+else:
+    db = None
+
 # ── Логирование ──────────────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -58,7 +63,6 @@ async def _ensure_db():
     """Инициализировать пул БД при первом обращении."""
     global _db_inited
     if DATABASE_URL and not _db_inited:
-        import db
         try:
             await db.init_pool(DATABASE_URL)
             _db_inited = True
@@ -74,7 +78,6 @@ async def _ask_groq(user_id: int, text: str) -> str:
 
         # Загружаем историю из БД (или из памяти, если БД нет)
         if DATABASE_URL:
-            import db
             history_rows = await db.get_history(user_id, limit=20)
         else:
             history_rows = []
@@ -165,7 +168,6 @@ async def start(update: Update, _context) -> None:
     """Команда /start."""
     user = update.effective_user
     if DATABASE_URL:
-        import db
         await db.upsert_user(
             user_id=user.id,
             username=user.username,
@@ -173,7 +175,6 @@ async def start(update: Update, _context) -> None:
             last_name=user.last_name,
             language_code=user.language_code,
         )
-    await update.message.reply_text(
         "👋 Привет! Я — Fable 5, модель от Anthropic.\n"
         "Просто напиши мне что-нибудь или используй /ask <вопрос>.\n"
         "Команда /clear сбрасывает историю диалога."
@@ -184,7 +185,6 @@ async def clear(update: Update, _context) -> None:
     """Команда /clear — сброс истории."""
     user_id = update.effective_user.id
     if DATABASE_URL:
-        import db
         await db.clear_history(user_id)
     await update.message.reply_text("🧹 История диалога очищена.")
 
@@ -246,7 +246,6 @@ async def health():
 async def lifespan_start():
     """Инициализировать пул БД, Application и установить webhook при старте."""
     if DATABASE_URL:
-        import db
         try:
             await db.init_pool(DATABASE_URL)
             logger.info("БД подключена")
