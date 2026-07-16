@@ -1,3 +1,4 @@
+import logging
 import os
 
 try:
@@ -5,6 +6,8 @@ try:
     load_dotenv()
 except ImportError:
     pass
+
+logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -15,6 +18,6 @@ SYSTEM_PROMPT = os.getenv(
 )
 
 if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN не задан")
+    logger.warning("TELEGRAM_BOT_TOKEN не задан — бот будет работать в режиме health-check")
 if not GROQ_API_KEY:
-    raise ValueError("GROQ_API_KEY не задан")
+    logger.warning("GROQ_API_KEY не задан — Groq-функции недоступны")

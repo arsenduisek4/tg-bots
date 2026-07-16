@@ -34,14 +34,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Groq-клиент ─────────────────────────────────────────────────────────────
-client = Groq(api_key=GROQ_API_KEY)
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # ── История диалогов (user_id -> список сообщений) ──────────────────────────
 MAX_HISTORY = 20
 history: dict[int, list[dict]] = defaultdict(list)
 
 # ── Telegram Application (инициализируем один раз) ──────────────────────────
-application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+application = Application.builder().token(TELEGRAM_BOT_TOKEN).build() if TELEGRAM_BOT_TOKEN else None
 
 
 def _build_messages(user_id: int, user_text: str) -> list[dict]:
@@ -124,10 +124,11 @@ async def handle_message(update: Update, _context) -> None:
 
 
 # ── Регистрируем хендлеры ───────────────────────────────────────────────────
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("clear", clear))
-application.add_handler(CommandHandler("ask", ask))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+if application:
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("clear", clear))
+    application.add_handler(CommandHandler("ask", ask))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 
 # ── FastAPI приложение ───────────────────────────────────────────────────────
@@ -137,6 +138,8 @@ app = FastAPI(docs_url=None, redoc_url=None)
 @app.post(f"/{TELEGRAM_BOT_TOKEN}")
 async def webhook(request: Request) -> dict:
     """Принимаем апдейты от Telegram."""
+    if not application:
+        return {"ok": False, "error": "not configured"}
     data = await request.json()
     update = Update.de_json(data, application.bot)
     await application.process_update(update)
@@ -151,6 +154,9 @@ async def health():
 
 async def lifespan_start():
     """Инициализировать Application и установить webhook при старте."""
+    if not application:
+        logger.warning("TELEGRAM_BOT_TOKEN не задан — webhook не установлен")
+        return
     await application.initialize()
     webhook_url = os.getenv("RENDER_EXTERNAL_URL", "")
     if not webhook_url:
