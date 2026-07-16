@@ -1,13 +1,15 @@
 """
-Telegram-бот на Groq API.
+Telegram-бот на Groq API (webhook для Render).
 
 Общение через /ask или просто текстовые сообщения.
 Поддерживает историю диалога (в памяти, до перезапуска).
 """
 
 import logging
+import os
 from collections import defaultdict
 
+from fastapi import FastAPI, Request
 from groq import Groq
 from telegram import Update
 from telegram.ext import (
@@ -35,8 +37,11 @@ logger = logging.getLogger(__name__)
 client = Groq(api_key=GROQ_API_KEY)
 
 # ── История диалогов (user_id -> список сообщений) ──────────────────────────
-MAX_HISTORY = 20  # пар сообщений user+assistant на пользователя
+MAX_HISTORY = 20
 history: dict[int, list[dict]] = defaultdict(list)
+
+# ── Telegram Application (инициализируем один раз) ──────────────────────────
+application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
 
 def _build_messages(user_id: int, user_text: str) -> list[dict]:
@@ -118,20 +123,43 @@ async def handle_message(update: Update, _context) -> None:
     await update.message.reply_text(reply)
 
 
-# ── Точка входа ──────────────────────────────────────────────────────────────
+# ── Регистрируем хендлеры ───────────────────────────────────────────────────
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("clear", clear))
+application.add_handler(CommandHandler("ask", ask))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 
-def main() -> None:
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("clear", clear))
-    app.add_handler(CommandHandler("ask", ask))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    logger.info("Бот запущен...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+# ── FastAPI приложение ───────────────────────────────────────────────────────
+app = FastAPI(docs_url=None, redoc_url=None)
 
 
-if __name__ == "__main__":
-    main()
+@app.post(f"/{TELEGRAM_BOT_TOKEN}")
+async def webhook(request: Request) -> dict:
+    """Принимаем апдейты от Telegram."""
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+    return {"ok": True}
+
+
+@app.get("/")
+async def health():
+    """Health-check для Render."""
+    return {"status": "ok"}
+
+
+async def lifespan_start():
+    """Установить webhook при старте."""
+    webhook_url = os.getenv("RENDER_EXTERNAL_URL", "")
+    if not webhook_url:
+        logger.warning("RENDER_EXTERNAL_URL не задан — webhook не установлен")
+        return
+    url = f"{webhook_url.rstrip('/')}/{TELEGRAM_BOT_TOKEN}"
+    await application.bot.set_webhook(url=url)
+    logger.info("Webhook установлен: %s", url)
+
+
+@app.on_event("startup")
+async def on_startup():
+    await lifespan_start()
