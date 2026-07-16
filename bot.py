@@ -51,9 +51,27 @@ def _build_messages(user_id: int, user_text: str, history_rows: list[dict]) -> l
     return msgs
 
 
+_db_inited = False
+
+
+async def _ensure_db():
+    """Инициализировать пул БД при первом обращении."""
+    global _db_inited
+    if DATABASE_URL and not _db_inited:
+        import db
+        try:
+            await db.init_pool(DATABASE_URL)
+            _db_inited = True
+            logger.info("БД подключена (ленивая инициализация)")
+        except Exception as e:
+            logger.exception("Не удалось подключиться к БД: %s", e)
+
+
 async def _ask_groq(user_id: int, text: str) -> str:
     """Отправить запрос в Groq и вернуть ответ."""
     try:
+        await _ensure_db()
+
         # Загружаем историю из БД (или из памяти, если БД нет)
         if DATABASE_URL:
             import db
