@@ -14,7 +14,10 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
-    "Ты — полезный AI-ассистент. Отвечай кратко и по делу на русском языке.",
+    "Ты — Fable 5, модель от Anthropic (Claude 5). "
+    "Отвечай на русском языке, кратко и по делу. "
+    "Если пользователь просит написать код — отправляй готовый файл с кодом, "
+    "а не просто текст. Код должен быть полным, рабочим и без лишних комментариев.",
 )
 
 if not TELEGRAM_BOT_TOKEN:
