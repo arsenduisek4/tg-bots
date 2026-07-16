@@ -21,17 +21,11 @@ from telegram.ext import (
 )
 
 from config import (
-    DATABASE_URL,
     GROQ_API_KEY,
     GROQ_MODEL,
     SYSTEM_PROMPT,
     TELEGRAM_BOT_TOKEN,
 )
-
-if DATABASE_URL:
-    import db  # noqa: E402 — импортируем сразу, чтобы _pool был общим
-else:
-    db = None
 
 # ── Логирование ──────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -46,43 +40,40 @@ client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 # ── Telegram Application (инициализируем один раз) ──────────────────────────
 application = Application.builder().token(TELEGRAM_BOT_TOKEN).build() if TELEGRAM_BOT_TOKEN else None
 
+# ── История диалога в памяти ────────────────────────────────────────────────
+# {user_id: [{"role": ..., "content": ...}, ...]}
+_history: dict[int, list[dict]] = {}
 
-def _build_messages(user_id: int, user_text: str, history_rows: list[dict]) -> list[dict]:
-    """Собрать список сообщений для Groq: system + история + новый запрос."""
-    msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for row in history_rows:
-        msgs.append({"role": row["role"], "content": row["content"]})
-    msgs.append({"role": "user", "content": user_text})
-    return msgs
+MAX_HISTORY = 20  # пар сообщений на пользователя
 
 
-_db_inited = False
+def _get_history(user_id: int) -> list[dict]:
+    """Вернуть историю пользователя."""
+    return _history.get(user_id, [])
 
 
-async def _ensure_db():
-    """Инициализировать пул БД при первом обращении."""
-    global _db_inited
-    if DATABASE_URL and not _db_inited:
-        try:
-            await db.init_pool(DATABASE_URL)
-            _db_inited = True
-            logger.info("БД подключена (ленивая инициализация)")
-        except Exception as e:
-            logger.exception("Не удалось подключиться к БД: %s", e)
+def _add_to_history(user_id: int, role: str, content: str) -> None:
+    """Добавить сообщение в историю."""
+    if user_id not in _history:
+        _history[user_id] = []
+    _history[user_id].append({"role": role, "content": content})
+    # Обрезаем до MAX_HISTORY пар (user + assistant)
+    if len(_history[user_id]) > MAX_HISTORY * 2:
+        _history[user_id] = _history[user_id][-MAX_HISTORY * 2:]
+
+
+def _clear_history(user_id: int) -> None:
+    """Очистить историю пользователя."""
+    _history.pop(user_id, None)
 
 
 async def _ask_groq(user_id: int, text: str) -> str:
     """Отправить запрос в Groq и вернуть ответ."""
     try:
-        await _ensure_db()
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages += _get_history(user_id)
+        messages.append({"role": "user", "content": text})
 
-        # Загружаем историю из БД (или из памяти, если БД нет)
-        if DATABASE_URL:
-            history_rows = await db.get_history(user_id, limit=20)
-        else:
-            history_rows = []
-
-        messages = _build_messages(user_id, text, history_rows)
         chat_completion = client.chat.completions.create(
             messages=messages,
             model=GROQ_MODEL,
@@ -91,11 +82,9 @@ async def _ask_groq(user_id: int, text: str) -> str:
         )
         reply = chat_completion.choices[0].message.content or "…"
 
-        # Сохраняем в БД
-        if DATABASE_URL:
-            await db.save_message(user_id, "user", text, model=GROQ_MODEL)
-            await db.save_message(user_id, "assistant", reply, model=GROQ_MODEL)
-            await db.increment_messages_used(user_id)
+        # Сохраняем в историю (в памяти)
+        _add_to_history(user_id, "user", text)
+        _add_to_history(user_id, "assistant", reply)
 
         return reply
     except Exception as e:
@@ -166,15 +155,6 @@ async def _send_reply(update: Update, text: str) -> None:
 
 async def start(update: Update, _context) -> None:
     """Команда /start."""
-    user = update.effective_user
-    if DATABASE_URL:
-        await db.upsert_user(
-            user_id=user.id,
-            username=user.username,
-            first_name=user.first_name,
-            last_name=user.last_name,
-            language_code=user.language_code,
-        )
     await update.message.reply_text(
         "👋 Привет! Я — Fable 5, модель от Anthropic.\n"
         "Просто напиши мне что-нибудь или используй /ask <вопрос>.\n"
@@ -185,8 +165,7 @@ async def start(update: Update, _context) -> None:
 async def clear(update: Update, _context) -> None:
     """Команда /clear — сброс истории."""
     user_id = update.effective_user.id
-    if DATABASE_URL:
-        await db.clear_history(user_id)
+    _clear_history(user_id)
     await update.message.reply_text("🧹 История диалога очищена.")
 
 
@@ -245,14 +224,7 @@ async def health():
 
 
 async def lifespan_start():
-    """Инициализировать пул БД, Application и установить webhook при старте."""
-    if DATABASE_URL:
-        try:
-            await db.init_pool(DATABASE_URL)
-            logger.info("БД подключена")
-        except Exception as e:
-            logger.exception("Не удалось подключиться к БД: %s", e)
-
+    """Инициализировать Application и установить webhook при старте."""
     if not application:
         logger.warning("TELEGRAM_BOT_TOKEN не задан — webhook не установлен")
         return
