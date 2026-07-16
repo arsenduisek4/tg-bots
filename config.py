@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama3-8b-8192")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
     "Ты — полезный AI-ассистент. Отвечай кратко и по делу на русском языке.",
