@@ -175,6 +175,7 @@ async def start(update: Update, _context) -> None:
             last_name=user.last_name,
             language_code=user.language_code,
         )
+    await update.message.reply_text(
         "👋 Привет! Я — Fable 5, модель от Anthropic.\n"
         "Просто напиши мне что-нибудь или используй /ask <вопрос>.\n"
         "Команда /clear сбрасывает историю диалога."
