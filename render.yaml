@@ -11,6 +11,6 @@ services:
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL
-        value: llama3-70b-8192
+        value: llama3-8b-8192
       - key: SYSTEM_PROMPT
         value: Ты — полезный AI-ассистент. Отвечай кратко и по делу на русском языке.
